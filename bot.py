@@ -1,90 +1,98 @@
 import asyncio
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-from telethon.errors import (
-    ApiIdInvalidError,
-    PhoneNumberInvalidError,
-    PhoneNumberBannedError,
-    PhoneCodeInvalidError,
-    PhoneCodeExpiredError,
-    SessionPasswordNeededError,
-    PasswordHashInvalidError,
-    PasswordRequiredError
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from pyrogram.raw.all import layer
+from pyrogram.errors import (
+    ApiIdInvalid,
+    PhoneCodeInvalid,
+    PhoneCodeExpired,
+    SessionPasswordNeeded
 )
-from dotenv import load_dotenv
+from pyrogram.sessions import StringSession
 import os
+from dotenv import load_dotenv
 
 load_dotenv()
 
-API_ID = os.getenv("API_ID")
+API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-Optimus = TelegramClient(
-    session="OptimusPrime",
-    api_id=API_ID,
-    api_hash=API_HASH
-).start(bot_token=BOT_TOKEN)
+bot = Client("StringBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-@Optimus.on(events.NewMessage(pattern='/start'))
-async def start_handler(event):
-    user_id = event.sender_id
-    username = event.sender.username or "N/A"
-    first_name = event.sender.first_name or "N/A"
-    last_name = event.sender.last_name or "N/A"
-    start_message = f"""
-👋 Hello {first_name}, I am a **Telethon String Session Generator Bot**.
 
-⚠️ Store your session string securely. Anyone with it can access your Telegram account!
+@bot.on_message(filters.command("start") & filters.private)
+async def start(_, message: Message):
+    await message.reply_text(
+        "**Welcome to Pyrogram String Session Generator**\n\n"
+        "Use /generate to begin."
+    )
 
-🔐 Your Info:
-➤ TG ID: `{user_id}`
-➤ Username: `{username}`
-➤ Name: `{first_name} {last_name}`
-"""
-    await event.respond(start_message)
 
-@Optimus.on(events.NewMessage(pattern="/generate"))
-async def generate_string_session_command(event):
+@bot.on_message(filters.command("generate") & filters.private)
+async def generate(_, message: Message):
     try:
-        async with Optimus.conversation(event.chat_id, timeout=300) as conv:
-            await conv.send_message("📥 Please send your **API ID**:")
-            your_api_id = await conv.get_response()
+        ask = await message.reply_text("📥 Send your API ID:")
+        api_id_msg = await bot.listen(message.chat.id)
+        api_id = api_id_msg.text.strip()
 
-            if not your_api_id.text.isdigit():
-                await conv.send_message("❌ Invalid API ID. Please enter a valid number.")
-                return
+        if not api_id.isdigit():
+            await api_id_msg.reply("❌ Invalid API ID. Process canceled.")
+            return
 
-            await conv.send_message("📥 Now, send your **API HASH**:")
-            your_api_hash = await conv.get_response()
+        ask = await message.reply_text("📥 Send your API HASH:")
+        api_hash_msg = await bot.listen(message.chat.id)
+        api_hash = api_hash_msg.text.strip()
 
-            await conv.send_message("📞 Now send your **phone number with country code** (e.g., +123456789):")
-            your_phone_number = await conv.get_response()
+        ask = await message.reply_text("📞 Send your phone number with country code (e.g., +123456789):")
+        phone_msg = await bot.listen(message.chat.id)
+        phone = phone_msg.text.strip()
 
-            try:
-                Prime = TelegramClient(StringSession(), api_id=int(your_api_id.text), api_hash=your_api_hash.text)
-                await Prime.connect()
+        app = Client(
+            name="gen_session",
+            api_id=int(api_id),
+            api_hash=api_hash,
+            in_memory=True,
+            session_string=StringSession()
+        )
 
-                await Prime.send_code_request(phone=your_phone_number.text)
-                await conv.send_message("📨 Please send the **OTP** you received:")
-                otp_code = await conv.get_response()
+        await app.connect()
+        sent_code = await app.send_code(phone)
 
-                try:
-                    await Prime.sign_in(phone=your_phone_number.text, code=otp_code.text)
+        ask = await message.reply("📨 Enter the OTP sent to your Telegram:")
+        otp_msg = await bot.listen(message.chat.id)
+        otp_code = otp_msg.text.strip()
 
-                except (PasswordRequiredError, SessionPasswordNeededError):
-                    await conv.send_message("🔐 Your account has **2FA enabled**. Please send your **password**:")
-                    password = await conv.get_response()
+        try:
+            await app.sign_in(phone_number=phone, phone_code=otp_code, phone_code_hash=sent_code.phone_code_hash)
+        except PhoneCodeInvalid:
+            await message.reply("❌ Invalid OTP. Try again.")
+            await app.disconnect()
+            return
+        except PhoneCodeExpired:
+            await message.reply("❌ OTP expired. Try again.")
+            await app.disconnect()
+            return
+        except SessionPasswordNeeded:
+            await message.reply("⚠️ Account has 2FA enabled. This bot does not support 2FA.")
+            await app.disconnect()
+            return
 
-                    try:
-                        await Prime.sign_in(password=password.text)
-                    except PasswordHashInvalidError:
-                        await conv.send_message("❌ Invalid password. Session cancelled. Use /generate to try again.")
-                        return
+        string_session = app.export_session_string()
+        me = await app.get_me()
+        await app.send_message(
+            "me",
+            f"✅ Your Pyrogram String Session:\n\n`{string_session}`\n\n"
+            f"📛 Name: {me.first_name}\n📱 ID: {me.id}\n\n⚠️ Keep it safe!"
+        )
+        await app.disconnect()
+        await message.reply("✅ Session string has been sent to your Saved Messages.")
 
-                session_string = Prime.session.save()
-                me = await Prime.get_me()
-                text = f"" 👋 Hello {me.first_name},
+    except ApiIdInvalid:
+        await message.reply("❌ Invalid API ID or API HASH.")
+    except Exception as e:
+        await message.reply(f"⚠️ Error: {e}")
 
-Here is your **Telethon String Session**:
 
+print("Pyrogram String Generator Bot Running...")
+bot.run()

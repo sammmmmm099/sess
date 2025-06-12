@@ -85,7 +85,7 @@ async def generate_string_session_command(event):
                 session_string = Prime.session.save()
                 me = await Prime.get_me()
                 text = f""
-👋 Hello {me.first_name},
+                👋 Hello {me.first_name},
 
 Here is your **Telethon String Session**:
 
